@@ -1,0 +1,98 @@
+{ bos_token }}
+{%- if messages[0]['role'] == 'system' -%}
+    {%- if messages[0]['content'] is string -%}
+        {%- set first_user_prefix = messages[0]['content'] + '\n\n' -%}
+    {%- else -%}
+        {%- set first_user_prefix = messages[0]['content'][0]['text'] + '\n\n' -%}
+    {%- endif -%}
+    {%- set loop_messages = messages[1:] -%}
+{%- else -%}
+    {%- set first_user_prefix = "" -%}
+    {%- set loop_messages = messages -%}
+{%- endif -%}
+{%- if not tools is defined %}
+    {%- set tools = none %}
+{%- endif %}
+{%- for message in loop_messages | rejectattr("role", "equalto", "tool") | selectattr("tool_calls", "undefined") -%}
+    {%- if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}
+        {# { raise_exception("Conversation roles must alternate user/assistant/user/assistant/...") } #}
+    {%- endif -%}
+{%- endfor -%}
+{%- for message in loop_messages -%}
+    {#- Normalize roles for model prompt formatting -#}
+    {%- if (message['role'] == 'assistant') -%}
+        {%- set role = "model" -%}
+    {%- elif (message['role'] == 'tool') -%}
+        {%- set role = "user" -%}
+    {%- else -%}
+        {%- set role = message['role'] -%}
+    {%- endif -%}
+    {{ '<start_of_turn>' + role + '\n' -}}
+    {#- Insert system message content (if present) at the beginning of the first message. -#}
+    {%- if loop.first and loop_messages[-1]['role'] != 'tool' -%}
+        {{- first_user_prefix -}}
+        {#- Append system message with tool information if using tools in message request. -#}
+        {%- if tools is not none -%}
+            {{- "\nYou have access to the following functions, you can call them if you need to (but you don't have to):\n```\n" -}}
+            {{- tools | tojson(indent=4) -}}
+            {{- "\n```\n\nTo call a function, output exactly in this format:\n" -}}
+            {{- "```tool_code\n{\"name\": \"function_name\", \"arguments\": {\"param1\": \"value1\", \"param2\": \"value2\"}}\n```\n\n" -}}
+            {{- "Function calling rules:\n" -}}
+            {{- "- Do NOT include any other text in the output!\n" -}}
+            {{- "- ALWAYS produce a function calling JSON object with \"name\" and \"arguments\" keys!\n\n" -}}
+        {%- endif -%}
+    {%- endif -%}
+
+    {#- Format model tool calls (turns where model indicates they want to call a tool) -#}
+    {%- if 'tool_calls' in message -%}
+        {{- "```tool_code\n" -}}
+        {%- for tool_call in message.tool_calls -%}
+            {%- if tool_call.function is defined -%}
+                {%- set tool_call = tool_call.function -%}
+                {%- if tool_call.name is defined -%}
+                    {{- "{\"name\": \"" + tool_call.name +  "\"" -}}
+                    {%- if tool_call.arguments is defined -%}
+                        {%- set arguments = tool_call.arguments -%}
+                        {%- if arguments is not string -%}
+                            {{- ", \"arguments\": " -}}
+                            {{- arguments|tojson|safe -}}
+                        {%- elif arguments == '' -%}
+                            {{- ", \"arguments\": {}" -}}
+                        {%- endif -%}
+                    {%- endif -%}
+                    {{- "}\n" -}}
+                {%- endif -%}
+            {%- endif -%}
+        {%- endfor -%}
+        {{- "```" -}}
+    {%- endif -%}
+
+    {#- Tool response start tag (for messages from a tool) -#}
+    {%- if (message['role'] == 'tool') -%}
+        {{ '```tool_output\n' -}}
+    {%- endif -%}
+    {#- Render the message content: handle plain string or multimodal content like image/text -#}
+    {%- if message['content'] is string -%}
+        {{ message['content'] | trim }}
+    {%- elif message['content'] is iterable -%}
+        {%- for item in message['content'] -%}
+            {%- if item['type'] == 'image' -%}
+                {{ '<start_of_image>' }}
+            {%- elif item['type'] == 'text' -%}
+                {{ item['text'] | trim }}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- else -%}
+        {{ raise_exception("Invalid content type") }}
+    {%- endif -%}
+    {#- Tool response end tag -#}
+    {%- if (message['role'] == 'tool') -%}
+        {{ '\n```' -}}
+    {%- endif -%}
+
+    {{ '<end_of_turn>\n' }}
+{%- endfor -%}
+
+{%- if add_generation_prompt -%}
+    {{'<start_of_turn>model\n'}}
+{%- endif -%}

@@ -303,14 +303,6 @@ class TokenizerWrapper:
                 self._think_end_id = vocab[think_end]
                 break
 
-        # Disable tool calling if tool call tokens aren't in vocab
-        if (tool_call_start and tool_call_start not in vocab) or (
-            tool_call_end and tool_call_end not in vocab
-        ):
-            self._tool_call_start = None
-            self._tool_call_end = None
-            self._tool_parser = None
-
     def apply_chat_template(self, *args, tokenize=True, **kwargs):
         if self._chat_template is not None:
             out = self._chat_template(*args, **kwargs)
@@ -488,6 +480,8 @@ def _infer_tool_parser(chat_template):
         return "kimi_k2"
     elif "<tool_call>" in chat_template and "tool_call.name" in chat_template:
         return "json_tools"
+    elif "tool_code" in chat_template:
+        return "gemma"
     return None
 
 
